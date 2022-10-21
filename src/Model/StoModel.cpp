@@ -152,7 +152,7 @@ DSP_RTN_CODE StoModel::readSmps(const char * filename)
 					newrowids,
 					node->getRowElements(i));
 			k++;
-			delete[] newrowids;
+			FREE_ARRAY_PTR(newrowids);
 		}
 
 		stage_data_[s] = sd;
@@ -196,10 +196,10 @@ DSP_RTN_CODE StoModel::readSmps(const char * filename)
 		node->copyRowLower(nd.rlbd_scen_);
 		node->copyRowUpper(nd.rubd_scen_);
 
-		CoinPackedVectorBase ** rows_scen_ = new CoinPackedVectorBase * [stage_data_[nd.stg_].nrows_];
 		int nrows_ = stage_data_[nd.stg_].nrows_;
 		int ncols_ = stage_data_[nd.stg_].ncols_;
 		int rstart_ = stage_data_[nd.stg_].rstart_;
+		CoinPackedVectorBase ** rows_scen_ = new CoinPackedVectorBase * [nrows_];
 		for (int i = rstart_; i < rstart_ + nrows_; ++i)
 		{
 			int* newrowids = new int [node->getRowLength(i)];
@@ -213,14 +213,12 @@ DSP_RTN_CODE StoModel::readSmps(const char * filename)
 					newrowids,
 					node->getRowElements(i));
 			rows_scen_[i-rstart_] = node->combineWithCoreRow(stage_data_[nd.stg_].rows_core_[i-rstart_],node_row_copy);
-			delete[] newrowids;
-			delete node_row_copy;
+			FREE_ARRAY_PTR(newrowids);
+			FREE_PTR(node_row_copy);
 		}
 		nd.mat_scen_ = new CoinPackedMatrix(false, (double)ncols_, (double)nrows_);//why double?
 		nd.mat_scen_->appendRows(nrows_,rows_scen_);
-		for (int i = 0; i < nrows_; ++i)
-			delete rows_scen_[i];
-		delete[] rows_scen_;
+		FREE_2D_ARRAY_PTR(nrows_, rows_scen_);
 
 		/** probability */
 		nd.prob_ = scnnode->getProb();
