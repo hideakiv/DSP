@@ -8,6 +8,134 @@
 #include "StoModel.h"
 #include "CoinHelperFunctions.hpp"
 
+StageData::StageData() :
+		nrows_(0),
+		ncols_(0),
+		nints_(0),
+		rstart_(0),
+		cstart_(0),
+		clbd_core_(NULL),
+		cubd_core_(NULL),
+		obj_core_(NULL),
+		// qobj_core_(NULL),
+		rlbd_core_(NULL),
+		rubd_core_(NULL),
+		ctype_core_(NULL),
+		rows_core_(NULL)
+		// qc_row_core_(NULL)
+{
+	/** nothing to do */
+}
+
+/** copy constructor */
+StageData::StageData(const StageData & rhs) :
+		nrows_(rhs.nrows_),
+		ncols_(rhs.ncols_),
+		nints_(rhs.nints_),
+		rstart_(rhs.rstart_),
+		cstart_(rhs.cstart_)
+{
+	clbd_core_ = new double [ncols_];
+	cubd_core_ = new double [ncols_];
+	obj_core_ = new double [ncols_];
+	rlbd_core_ = new double [nrows_];
+	rubd_core_ = new double [nrows_];
+	ctype_core_ = new char [ncols_];
+	rows_core_ = new CoinPackedVector * [nrows_];
+
+	CoinCopyN(rhs.clbd_core_, ncols_, clbd_core_);
+	CoinCopyN(rhs.cubd_core_, ncols_, cubd_core_);
+	CoinCopyN(rhs.obj_core_, ncols_, obj_core_);
+	CoinCopyN(rhs.rlbd_core_, nrows_, rlbd_core_);
+	CoinCopyN(rhs.rubd_core_, nrows_, rubd_core_);
+	CoinCopyN(rhs.ctype_core_, ncols_, ctype_core_);
+
+	for (int i = nrows_ - 1; i >= 0; --i)
+	{
+		if (rhs.rows_core_[i])
+			rows_core_[i] = new CoinPackedVector(*(rhs.rows_core_[i]));
+		else
+			rows_core_[i] = new CoinPackedVector;
+	}
+}
+/** destructor */
+StageData::~StageData()
+{
+	FREE_ARRAY_PTR(clbd_core_);
+	FREE_ARRAY_PTR(cubd_core_);
+	FREE_ARRAY_PTR(obj_core_);
+	FREE_ARRAY_PTR(rlbd_core_);
+	FREE_ARRAY_PTR(rubd_core_);
+	FREE_ARRAY_PTR(ctype_core_);
+	FREE_2D_PTR(nrows_, rows_core_);
+	nrows_ = 0;
+	ncols_ = 0;
+	nints_ = 0;
+	rstart_ = 0;
+	cstart_ = 0;
+}
+
+DspScnNode::DspScnNode() :
+		stg_(0),
+        prob_(0.0),
+		parent_(NULL),
+		children_(),
+		mat_scen_(NULL),
+		clbd_scen_(NULL),
+		cubd_scen_(NULL),
+		obj_scen_(NULL),
+		// qobj_scen_(NULL),
+		rlbd_scen_(NULL),
+		rubd_scen_(NULL)
+		// qc_row_scen_(NULL),
+{
+	/** nothing to do */
+}
+
+/** copy constructor */
+DspScnNode::DspScnNode(const DspScnNode & rhs) :
+		stg_(rhs.stg_),
+        prob_(rhs.prob_),
+		parent_(NULL),
+		children_()
+{
+	int ncols = sizeof(rhs.clbd_scen_) / sizeof(double);
+	assert(sizeof(rhs.cubd_scen_) / sizeof(double) == ncols 
+		&& sizeof(rhs.obj_scen_) / sizeof(double) == ncols);
+
+	int nrows = sizeof(rhs.rlbd_scen_) / sizeof(double);
+	assert(sizeof(rhs.rubd_scen_) / sizeof(double) == nrows);
+
+	if (rhs.mat_scen_)
+		mat_scen_ = new CoinPackedMatrix(*(rhs.mat_scen_));
+	else
+		mat_scen_ = new CoinPackedMatrix;
+
+	clbd_scen_ = new double [ncols];
+	cubd_scen_ = new double [ncols];
+	obj_scen_ = new double [ncols];
+	rlbd_scen_ = new double [nrows];
+	rubd_scen_ = new double [nrows];
+
+	CoinCopyN(rhs.clbd_scen_, ncols, clbd_scen_);
+	CoinCopyN(rhs.cubd_scen_, ncols, cubd_scen_);
+	CoinCopyN(rhs.obj_scen_, ncols, obj_scen_);
+	CoinCopyN(rhs.rlbd_scen_, nrows, rlbd_scen_);
+	CoinCopyN(rhs.rubd_scen_, nrows, rubd_scen_);
+}
+
+/** destructor */
+DspScnNode::~DspScnNode()
+{
+	FREE_PTR(mat_scen_);
+	FREE_ARRAY_PTR(clbd_scen_);
+	FREE_ARRAY_PTR(cubd_scen_);
+	FREE_ARRAY_PTR(obj_scen_);
+	FREE_ARRAY_PTR(rlbd_scen_);
+	FREE_ARRAY_PTR(rubd_scen_);
+	stg_ = 0;
+	prob_ = 0.0;
+}
 
 StoModel::StoModel() :
 		nstgs_(0),
@@ -16,33 +144,75 @@ StoModel::StoModel() :
 		nrows_core_(0),
 		ncols_core_(0),
 		nints_core_(0),
-		dsp_tree_()
+		stage_data_(NULL),
+		node_data_(),
+		fromSMPS_(false)
 {
-
+	/** nothing to do */
 }
 
 /** copy constructor */
-StoModel::StoModel(const StoModel & rhs)
+StoModel::StoModel(const StoModel & rhs) :
+		nstgs_(rhs.nstgs_),
+		nnodes_(rhs.nnodes_),
+		nscen_(rhs.nscen_),
+		nrows_core_(rhs.nrows_core_),
+		ncols_core_(rhs.ncols_core_),
+		nints_core_(rhs.nints_core_),
+		fromSMPS_(rhs.fromSMPS_)
 {
+	/** allocate memory */
+	stage_data_ = new StageData * [nstgs_];
+	node_data_.reserve(nnodes_);
+
+	/** copy */
+	for (int s = nstgs_ - 1; s >= 0; --s)
+	{
+		StageData* sd = new StageData(*(rhs.stage_data_[s]));
+		stage_data_[s] = sd;
+	}
+	
+	DspScnNode* dsproot = new DspScnNode(*(rhs.node_data_[0]));
+	copyAllSubNodes(*(rhs.node_data_[0]), dsproot);
+
+	/** copy initial solutions */
+	for (unsigned i = 0; i < rhs.init_solutions_.size(); ++i)
+		init_solutions_.push_back(new CoinPackedVector(rhs.init_solutions_[i]));
 
 }
 
-StoModel::StoModel(const SmiScnModel & rhs)
+void StoModel::copyAllSubNodes(const DspScnNode & rhs, DspScnNode* dsproot)
 {
-
+	node_data_.push_back(dsproot);
+	for (DspScnNode * child : rhs.children_)
+	{
+		DspScnNode* dspchild = new DspScnNode(*(child));
+		dsproot->addChild(dspchild);
+		dspchild->addParent(dsproot);
+		copyAllSubNodes(*(child), dspchild);
+	}
 }
 
 /** destructor */
 StoModel::~StoModel()
 {
-
+	FREE_2D_ARRAY_PTR(nstgs_, stage_data_);
+	for (unsigned i = 0; i < node_data_.size(); ++i)
+		FREE_PTR(node_data_[i]);
+	for (unsigned i = 0; i < init_solutions_.size(); ++i)
+		FREE_PTR(init_solutions_[i]);
+	nstgs_ = 0;
+	nnodes_ = 0;
+	nscen_ = 0;
+	nrows_core_ = 0;
+	ncols_core_ = 0;
+	nints_core_ = 0;
 }
 
 DSP_RTN_CODE StoModel::readSmps(const char * filename)
 {	
 	SmiScnModel smi;
 	SmiCoreData * core = NULL;
-	SmiNodeData * node = NULL;
 
 	BGN_TRY_CATCH
 
@@ -68,8 +238,8 @@ DSP_RTN_CODE StoModel::readSmps(const char * filename)
 
 	/** allocate memory */
 	assert(getNumScenarios() > 0);
-	stage_data_ = new StageData[nstgs_];
-    node_data_ = new NodeData [nnodes_];
+	stage_data_ = new StageData * [nstgs_];
+    node_data_.reserve(nnodes_);
 
 	// for (i=0; i<nstgs_;i++){
 	// 	qobj_core_[i]=NULL;
@@ -83,148 +253,14 @@ DSP_RTN_CODE StoModel::readSmps(const char * filename)
 	ncols_core_ = core->getNumCols();
 	nints_core_ = core->getBinaryLength() + core->getIntegerLength();
 
-	int k = 0; /**< for checking core rows*/
+	counter = 0; /**< for checking core rows*/
 
-	for (int s = 0; s < nstgs_; ++s)
-	{
-		assert(core->getNumRows(s) >= 0);
-		assert(core->getNumCols(s) >= 0);
-		assert(core->getRowStart(s) >= 0);
-		assert(core->getColStart(s) >= 0);
-		StageData sd = StageData();
-		sd.nrows_ = core->getNumRows(s);
-		sd.ncols_ = core->getNumCols(s);
-		sd.nints_ = (int) core->getIntCols(s).size();
-		sd.rstart_ = core->getRowStart(s);
-		sd.cstart_ = core->getColStart(s);
-		sd.clbd_core_ = new double [sd.ncols_];
-		sd.cubd_core_ = new double [sd.ncols_];
-		sd.obj_core_ = new double [sd.ncols_];
-		sd.rlbd_core_ = new double [sd.nrows_];
-		sd.rubd_core_ = new double [sd.nrows_];
-		sd.ctype_core_ = new char [sd.ncols_];
-		sd.rows_core_ = new CoinPackedVector * [sd.nrows_];
-		core->copyColLower(sd.clbd_core_, s);
-		core->copyColUpper(sd.cubd_core_, s);
-		core->copyObjective(sd.obj_core_, s);
-		core->copyRowLower(sd.rlbd_core_, s);
-		core->copyRowUpper(sd.rubd_core_, s);
+	for (int s = 0; s < nstgs_; ++s) addStage(core, s);
+	assert(counter == nrows_core_);
 
-		/** set column types */
-		CoinFillN(sd.ctype_core_, sd.ncols_, 'C');
-		for (int j = 0; j < core->getBinaryLength(); ++j)
-		{
-			int binIndex = core->getBinaryIndices()[j];
-			if (binIndex < sd.cstart_ ||
-				binIndex >= sd.cstart_ + sd.ncols_)
-				continue;
-			sd.ctype_core_[binIndex - sd.cstart_] = 'B';
-			sd.clbd_core_[binIndex - sd.cstart_] = 0.0;
-			sd.cubd_core_[binIndex - sd.cstart_] = 1.0;
-		}
-		for (int j = 0; j < core->getIntegerLength(); ++j)
-		{
-			int intIndex = core->getIntegerIndices()[j];
-			if (intIndex < sd.cstart_ ||
-				intIndex >= sd.cstart_ + sd.ncols_)
-				continue;
-			sd.ctype_core_[intIndex - sd.cstart_] = 'I';
-		}
-		/** construct core matrix rows */
-		node = core->getNode(s);
-		for (int i = sd.rstart_; i < sd.rstart_ + sd.nrows_; ++i)
-		{
-			/**
-			 * TODO: I assume the core matrix rows are well ordered.
-			 */
-			if (i != k)
-			{
-				CoinError("Unexpected core file structure.", "readSmps", "StoModel");
-			}
-			int* newrowids = new int [node->getRowLength(i)];
-			const int* oldrowids = node->getRowIndices(i);
-			for (int j = 0; j < node->getRowLength(i); ++j) 
-			{
-				newrowids[j] = oldrowids[j] - sd.cstart_;
-			}
-			sd.rows_core_[i-sd.rstart_] = new CoinPackedVector(
-					node->getRowLength(i),
-					newrowids,
-					node->getRowElements(i));
-			k++;
-			FREE_ARRAY_PTR(newrowids);
-		}
-
-		stage_data_[s] = sd;
-	}
-	assert(k == nrows_core_);
-
-	dsp_tree_.addNodesToTree(NULL);
-
-	/** clear scenario-leafnode map */
-	scen2node_.clear();
-	int s = 0;
-
-	std::vector<int> lens;
-	for (int t = 0; t < nnodes_; ++t)
-	{
-		NodeData nd = NodeData();
-
-		SmiScnNode* scnnode = smi.getSmiTree()->wholeTree()[t];
-		/** get stage corresponding to scenario */
-		nd.stg_ = scnnode->getStage();
-
-		/** initialize node data */
-		node = scnnode->getNode();
-		nd.clbd_scen_ = new double [stage_data_[nd.stg_].ncols_];
-		nd.cubd_scen_ = new double [stage_data_[nd.stg_].ncols_];
-		nd.obj_scen_ = new double [stage_data_[nd.stg_].ncols_];
-		nd.rlbd_scen_ = new double [stage_data_[nd.stg_].nrows_];
-		nd.rubd_scen_ = new double [stage_data_[nd.stg_].nrows_];
-		node->copyColLower(nd.clbd_scen_);
-		node->copyColUpper(nd.cubd_scen_);
-		/** update columns for binary variables since some solvers can't process properly*/
-		for (int j = 0; j < stage_data_[nd.stg_].ncols_; ++j)
-		{
-			if (stage_data_[nd.stg_].ctype_core_[j] == 'B')
-			{
-				nd.clbd_scen_[j] = 0.0;
-				nd.cubd_scen_[j] = 1.0;
-			}
-		}
-		node->copyObjective(nd.obj_scen_);
-		node->copyRowLower(nd.rlbd_scen_);
-		node->copyRowUpper(nd.rubd_scen_);
-
-		int nrows_ = stage_data_[nd.stg_].nrows_;
-		int ncols_ = stage_data_[nd.stg_].ncols_;
-		int rstart_ = stage_data_[nd.stg_].rstart_;
-		CoinPackedVectorBase ** rows_scen_ = new CoinPackedVectorBase * [nrows_];
-		for (int i = rstart_; i < rstart_ + nrows_; ++i)
-		{
-			int* newrowids = new int [node->getRowLength(i)];
-			const int* oldrowids = node->getRowIndices(i);
-			for (int j = 0; j < node->getRowLength(i); ++j) 
-			{
-				newrowids[j] = oldrowids[j] - stage_data_[nd.stg_].cstart_;
-			}
-			CoinPackedVector* node_row_copy = new CoinPackedVector(
-					node->getRowLength(i),
-					newrowids,
-					node->getRowElements(i));
-			rows_scen_[i-rstart_] = node->combineWithCoreRow(stage_data_[nd.stg_].rows_core_[i-rstart_],node_row_copy);
-			FREE_ARRAY_PTR(newrowids);
-			FREE_PTR(node_row_copy);
-		}
-		nd.mat_scen_ = new CoinPackedMatrix(false, (double)ncols_, (double)nrows_);//why double?
-		nd.mat_scen_->appendRows(nrows_,rows_scen_);
-		FREE_2D_ARRAY_PTR(nrows_, rows_scen_);
-
-		/** probability */
-		nd.prob_ = scnnode->getProb();
-
-		node_data_[t] = nd;
-	}
+	SmiTreeNode<SmiScnNode *> * root = smi.getSmiTree()->getRoot();
+	DspScnNode* dsproot = createNode(core, root->getDataPtr());
+	addAllSubNodes(core, root, dsproot);
 
 	/** mark */
 	fromSMPS_ = true;
@@ -234,12 +270,147 @@ DSP_RTN_CODE StoModel::readSmps(const char * filename)
 	return DSP_RTN_OK;
 }
 
-const CoinPackedVector * StoModel::getObjScenario(int scenario, int stage) 
+void StoModel::addStage(
+	SmiCoreData * core,
+	int s
+)
 {
-    SmiNodeData * node = getSmiTree()->find(scenario, stage)->getDataPtr()->getNode();
-    return new CoinPackedVector(
-            node->getObjectiveLength(), node->getObjectiveIndices(), node->getObjectiveElements());
-    // return obj_scen_[scenario];
+	assert(core->getNumRows(s) >= 0);
+	assert(core->getNumCols(s) >= 0);
+	assert(core->getRowStart(s) >= 0);
+	assert(core->getColStart(s) >= 0);
+	StageData* sd = new StageData();
+	sd->nrows_ = core->getNumRows(s);
+	sd->ncols_ = core->getNumCols(s);
+	sd->nints_ = (int) core->getIntCols(s).size();
+	sd->rstart_ = core->getRowStart(s);
+	sd->cstart_ = core->getColStart(s);
+	sd->clbd_core_ = new double [sd->ncols_];
+	sd->cubd_core_ = new double [sd->ncols_];
+	sd->obj_core_ = new double [sd->ncols_];
+	sd->rlbd_core_ = new double [sd->nrows_];
+	sd->rubd_core_ = new double [sd->nrows_];
+	sd->ctype_core_ = new char [sd->ncols_];
+	sd->rows_core_ = new CoinPackedVector * [sd->nrows_];
+	core->copyColLower(sd->clbd_core_, s);
+	core->copyColUpper(sd->cubd_core_, s);
+	core->copyObjective(sd->obj_core_, s);
+	core->copyRowLower(sd->rlbd_core_, s);
+	core->copyRowUpper(sd->rubd_core_, s);
+
+	/** set column types */
+	CoinFillN(sd->ctype_core_, sd->ncols_, 'C');
+	for (int j = 0; j < core->getBinaryLength(); ++j)
+	{
+		int binIndex = core->getBinaryIndices()[j];
+		if (binIndex < sd->cstart_ ||
+			binIndex >= sd->cstart_ + sd->ncols_)
+			continue;
+		sd->ctype_core_[binIndex - sd->cstart_] = 'B';
+		sd->clbd_core_[binIndex - sd->cstart_] = 0.0;
+		sd->cubd_core_[binIndex - sd->cstart_] = 1.0;
+	}
+	for (int j = 0; j < core->getIntegerLength(); ++j)
+	{
+		int intIndex = core->getIntegerIndices()[j];
+		if (intIndex < sd->cstart_ ||
+			intIndex >= sd->cstart_ + sd->ncols_)
+			continue;
+		sd->ctype_core_[intIndex - sd->cstart_] = 'I';
+	}
+	/** construct core matrix rows */
+	SmiNodeData * node = core->getNode(s);
+	for (int i = sd->rstart_; i < sd->rstart_ + sd->nrows_; ++i)
+	{
+		/**
+		 * TODO: I assume the core matrix rows are well ordered.
+		 */
+		if (i != counter)
+		{
+			CoinError("Unexpected core file structure.", "readSmps", "StoModel");
+		}
+		
+		sd->rows_core_[i-sd->rstart_] = splitRowVec(node, core, i);
+		counter++;
+	}
+
+	stage_data_[s] = sd;
+}
+
+DspScnNode* StoModel::createNode(
+	SmiCoreData * core,
+	SmiScnNode * scnnode
+)
+{
+	DspScnNode* nd = new DspScnNode();
+
+	/** get stage corresponding to scenario */
+	nd->stg_ = scnnode->getStage();
+
+	/** initialize node data */
+	SmiNodeData * node = scnnode->getNode();
+	nd->clbd_scen_ = new double [stage_data_[nd->stg_]->ncols_];
+	nd->cubd_scen_ = new double [stage_data_[nd->stg_]->ncols_];
+	nd->obj_scen_ = new double [stage_data_[nd->stg_]->ncols_];
+	nd->rlbd_scen_ = new double [stage_data_[nd->stg_]->nrows_];
+	nd->rubd_scen_ = new double [stage_data_[nd->stg_]->nrows_];
+	node->copyColLower(nd->clbd_scen_);
+	node->copyColUpper(nd->cubd_scen_);
+	/** update columns for binary variables since some solvers can't process properly*/
+	for (int j = 0; j < stage_data_[nd->stg_]->ncols_; ++j)
+	{
+		if (stage_data_[nd->stg_]->ctype_core_[j] == 'B')
+		{
+			nd->clbd_scen_[j] = 0.0;
+			nd->cubd_scen_[j] = 1.0;
+		}
+	}
+	node->copyObjective(nd->obj_scen_);
+	node->copyRowLower(nd->rlbd_scen_);
+	node->copyRowUpper(nd->rubd_scen_);
+
+	int nrows_ = stage_data_[nd->stg_]->nrows_;
+	int ncols_ = stage_data_[nd->stg_]->ncols_;
+	int rstart_ = stage_data_[nd->stg_]->rstart_;
+	CoinPackedVectorBase ** rows_scen_ = new CoinPackedVectorBase * [nrows_];
+	for (int i = rstart_; i < rstart_ + nrows_; ++i)
+	{
+		CoinPackedVector* node_row_copy = splitRowVec(node, core, i);
+		rows_scen_[i-rstart_] = node->combineWithCoreRow(stage_data_[nd->stg_]->rows_core_[i-rstart_],node_row_copy);
+		FREE_PTR(node_row_copy);
+	}
+	nd->mat_scen_ = new CoinPackedMatrix(false, 0.0, 0.0);
+	nd->mat_scen_->setDimensions(0, ncols_);
+	nd->mat_scen_->appendRows(nrows_,rows_scen_);
+	FREE_2D_ARRAY_PTR(nrows_, rows_scen_);
+
+	/** probability */
+	nd->prob_ = scnnode->getProb();
+
+	return nd;
+}
+
+void StoModel::addAllSubNodes(
+	SmiCoreData * core,
+	SmiTreeNode<SmiScnNode *> * root,
+	DspScnNode* dsproot
+)
+{
+	node_data_.push_back(dsproot);
+	std::vector<SmiTreeNode<SmiScnNode *> *> * children = root->getChildren();
+	for (SmiTreeNode<SmiScnNode *> * child : *children)
+	{
+		DspScnNode* dspchild = createNode(core, child->getDataPtr());
+		dsproot->addChild(dspchild);
+		dspchild->addParent(dsproot);
+		addAllSubNodes(core, child, dspchild);
+	}
+	delete children;
+}
+
+const double * StoModel::getObjNode(DspScnNode* node) 
+{
+    return node->obj_scen_;
 }
 
 /** construct a map that maps variable names to their indices */
@@ -336,9 +507,9 @@ bool StoModel::mapVarnameIndex(map<string, int> &map_varName_index, const char *
 	return true;
 }
 
-void StoModel::setProbability(double *probability)
+void StoModel::setProbability(DspScnNode* node, double probability)
 {
-	CoinCopyN(probability, nscen_, prob_);
+	node->prob_ = probability;
 }
 
 void StoModel::setSolution(int size, double * solution)
@@ -478,6 +649,26 @@ void StoModel::setSolution(int size, double * solution)
 // 			prob_[s] /= prob_sum;
 // }
 
+CoinPackedVector * StoModel::splitRowVec(
+		SmiNodeData * node,
+		SmiCoreData * core,
+		int i /**< row index */
+)
+{
+	int* newrowids = new int [node->getRowLength(i)];
+	const int* oldrowids = node->getRowIndices(i);
+	for (int j = 0; j < node->getRowLength(i); ++j) 
+	{
+		newrowids[j] = oldrowids[j] - core->getColStart(node->getStage());
+	}
+	CoinPackedVector * split = new CoinPackedVector(
+			node->getRowLength(i),
+			newrowids,
+			node->getRowElements(i));
+	FREE_ARRAY_PTR(newrowids);
+	return split;
+}
+
 /** split core matrix row for a given stage */
 CoinPackedVector * StoModel::splitCoreRowVec(
 		int i,  /**< row index */
@@ -489,15 +680,15 @@ CoinPackedVector * StoModel::splitCoreRowVec(
 	CoinPackedVector * split = new CoinPackedVector;
 
 	/** reserve memory */
-	split->reserve(stage_data_[stg].ncols_);
+	split->reserve(stage_data_[stg]->ncols_);
 
 	/** insert elements */
-	for (j = 0; j < rows_core_[i]->getNumElements(); ++j)
+	for (j = 0; j < stage_data_[stg]->rows_core_[i]->getNumElements(); ++j)
 	{
-		ind = rows_core_[i]->getIndices()[j] - stage_data_[stg].cstart_;
-		if (ind >= 0 && ind < stage_data_[stg].ncols_)
+		ind = stage_data_[stg]->rows_core_[i]->getIndices()[j] - stage_data_[stg]->cstart_;
+		if (ind >= 0 && ind < stage_data_[stg]->ncols_)
 		{
-			split->insert(ind, rows_core_[i]->getElements()[j]);
+			split->insert(ind, stage_data_[stg]->rows_core_[i]->getElements()[j]);
 		}
 	}
 
@@ -507,21 +698,21 @@ CoinPackedVector * StoModel::splitCoreRowVec(
 /** copy core column lower bounds */
 void StoModel::copyCoreColLower(double * clbd, int stg)
 {
-	CoinCopyN(stage_data_[stg].clbd_core_, stage_data_[stg].ncols_, clbd);
+	CoinCopyN(stage_data_[stg]->clbd_core_, stage_data_[stg]->ncols_, clbd);
 }
 
 /** copy core column upper bounds */
 void StoModel::copyCoreColUpper(double * cubd, int stg)
 {
-	CoinCopyN(stage_data_[stg].cubd_core_, stage_data_[stg].ncols_, cubd);
+	CoinCopyN(stage_data_[stg]->cubd_core_, stage_data_[stg]->ncols_, cubd);
 }
 
 /** copy core objective coefficients */
 void StoModel::copyCoreObjective(double * obj, int stg)
 {
-	for (int j = 0; j < stage_data_[stg].ncols_; ++j)
+	for (int j = 0; j < stage_data_[stg]->ncols_; ++j)
 	{
-		obj[j] = stage_data_[stg].obj_core_[j];
+		obj[j] = stage_data_[stg]->obj_core_[j];
 	}
 }
 
@@ -593,37 +784,38 @@ void StoModel::copyCoreObjective(double * obj, int stg)
 /** copy core column types */
 void StoModel::copyCoreColType(char * ctype, int stg)
 {
-	CoinCopyN(stage_data_[stg].ctype_core_, stage_data_[stg].ncols_, ctype);
+	CoinCopyN(stage_data_[stg]->ctype_core_, stage_data_[stg]->ncols_, ctype);
 }
 
 /** copy core row lower bounds */
 void StoModel::copyCoreRowLower(double * rlbd, int stg)
 {
-	CoinCopyN(stage_data_[stg].rlbd_core_, stage_data_[stg].nrows_, rlbd);
+	CoinCopyN(stage_data_[stg]->rlbd_core_, stage_data_[stg]->nrows_, rlbd);
 }
 
 /** copy core row upper bounds */
 void StoModel::copyCoreRowUpper(double * rubd, int stg)
 {
-	CoinCopyN(stage_data_[stg].rubd_core_, stage_data_[stg].nrows_, rubd);
+	CoinCopyN(stage_data_[stg]->rubd_core_, stage_data_[stg]->nrows_, rubd);
 }
 
 /** combine random matrix row for a given scenario */
 void StoModel::combineRandRowVec(
 		CoinPackedVector * row, /**< core row vector */
 		int i,                  /**< row index */
-		int node                /**< node index */)
+		DspScnNode* node        /**< node index */)
 {
 	int j;
 	int pos = 0; /** position to sparse row vector elements */
 
 	/** random matrix row info */
-	CoinBigIndex   start = node_data_[node].mat_scen_->getVectorStarts()[i];
-	const int *    ind   = node_data_[node].mat_scen_->getIndices() + start;
-	const double * elem  = node_data_[node].mat_scen_->getElements() + start;
+	CoinBigIndex   start = node->mat_scen_->getVectorStarts()[i];
+	const int *    ind   = node->mat_scen_->getIndices() + start;
+	const double * elem  = node->mat_scen_->getElements() + start;
 
-	for (j = 0; j < node_data_[node].mat_scen_->getVectorSize(i); ++j)
+	for (j = 0; j < node->mat_scen_->getVectorSize(i); ++j)
 	{
+		//fixme
 		while (row->getIndices()[pos] < ind[j] && pos < row->getNumElements())
 		{
 			pos++;
@@ -640,20 +832,21 @@ void StoModel::combineRandRowVec(
 		CoinPackedVector * row, /**< core row vector */
 		int i,                  /**< row index */
 		int stg,                /**< stage index */
-		int node                /**< node index */)
+		DspScnNode* node        /**< node index */)
 {
 	int j, col;
 	int pos = 0; /** position to sparse row vector elements */
 
 	/** random matrix row info */
-	CoinBigIndex   start = node_data_[node].mat_scen_->getVectorStarts()[i];
-	const int *    ind   = node_data_[node].mat_scen_->getIndices() + start;
-	const double * elem  = node_data_[node].mat_scen_->getElements() + start;
+	CoinBigIndex   start = node->mat_scen_->getVectorStarts()[i];
+	const int *    ind   = node->mat_scen_->getIndices() + start;
+	const double * elem  = node->mat_scen_->getElements() + start;
 
-	for (j = 0; j < node_data_[node].mat_scen_->getVectorSize(i); ++j)
+	for (j = 0; j < node->mat_scen_->getVectorSize(i); ++j)
 	{
-		col = ind[j] - stage_data_[stg].cstart_;
-		if (col >= 0 && col < stage_data_[stg].ncols_)
+		//fixme
+		col = ind[j] - stage_data_[stg]->cstart_;
+		if (col >= 0 && col < stage_data_[stg]->ncols_)
 		{
 			while (row->getIndices()[pos] < col && pos < row->getNumElements())
 			{
@@ -668,50 +861,30 @@ void StoModel::combineRandRowVec(
 }	
 
 /** combine random column lower bounds */
-void StoModel::combineRandColLower(double * clbd, int stg, int node)
+void StoModel::combineRandColLower(double * clbd, DspScnNode* node)
 {
-	for (int i = 0; i < node_data_[node].clbd_scen_->getNumElements(); ++i)
+	for (int i = 0; i < stage_data_[node->stg_]->ncols_; ++i)
 	{
-		int j = node_data_[node].clbd_scen_->getIndices()[i] - stage_data_[stg].cstart_;
-		if (j >= 0 && j < stage_data_[stg].ncols_)
-		{
-			clbd[j] = node_data_[node].clbd_scen_->getElements()[i];
-		}
+		clbd[i] = node->clbd_scen_[i];
 	}
 }
 
 /** combine random column upper bounds */
-void StoModel::combineRandColUpper(double * cubd, int stg, int node)
+void StoModel::combineRandColUpper(double * cubd, DspScnNode* node)
 {
-	for (int i = 0; i < node_data_[node].cubd_scen_->getNumElements(); ++i)
+	for (int i = 0; i < stage_data_[node->stg_]->ncols_; ++i)
 	{
-		int j = node_data_[node].cubd_scen_->getIndices()[i] - stage_data_[stg].cstart_;
-		if (j >= 0 && j < stage_data_[stg].ncols_)
-		{
-			cubd[j] = node_data_[node].cubd_scen_->getElements()[i];
-		}
+		cubd[i] = node->cubd_scen_[i];
 	}
 }
 
 /** combine random objective coefficients */
-void StoModel::combineRandObjective(double * obj, int stg, int node, bool adjustProbability)
+void StoModel::combineRandObjective(double * obj, DspScnNode* node, double adjustProbability = 1.0)
 {
 	int i, j;
-	for (i = 0; i < node_data_[node].obj_scen_->getNumElements(); ++i)
+	for (i = 0; i < stage_data_[node->stg_]->ncols_; ++i)
 	{
-		j = node_data_[node].obj_scen_->getIndices()[i] - stage_data_[stg].cstart_;
-		if (j >= 0 && j < stage_data_[stg].ncols_)
-		{
-			obj[j] = node_data_[node].obj_scen_->getElements()[i];
-		}
-	}
-
-	if (adjustProbability)
-	{ 
-		for (j = stage_data_[stg].ncols_ - 1; j >= 0; --j)
-		{
-			obj[j] *= node_data_[node].prob_;
-		}
+		obj[j] = node->obj_scen_[i] * adjustProbability;
 	}
 }
 
@@ -792,28 +965,20 @@ void StoModel::combineRandObjective(double * obj, int stg, int node, bool adjust
 // }
 
 /** combine random row lower bounds */
-void StoModel::combineRandRowLower(double * rlbd, int stg, int node)
+void StoModel::combineRandRowLower(double * rlbd, DspScnNode* node)
 {
-	for (int i = 0; i < node_data_[node].rlbd_scen_->getNumElements(); ++i)
+	for (int i = 0; i < stage_data_[node->stg_]->nrows_; ++i)
 	{
-		int j = node_data_[node].rlbd_scen_->getIndices()[i] - stage_data_[stg].rstart_;
-		if (j >= 0 && j < stage_data_[stg].nrows_)
-		{
-			rlbd[j] = node_data_[node].rlbd_scen_->getElements()[i];
-		}
+		rlbd[i] = node->rlbd_scen_[i];
 	}
 }
 
 /** combine random row upper bounds */
-void StoModel::combineRandRowUpper(double * rubd, int stg, int node)
+void StoModel::combineRandRowUpper(double * rubd, DspScnNode* node)
 {
-	for (int i = 0; i < node_data_[node].rubd_scen_->getNumElements(); ++i)
+	for (int i = 0; i < stage_data_[node->stg_]->nrows_; ++i)
 	{
-		int j = node_data_[node].rubd_scen_->getIndices()[i] - stage_data_[stg].rstart_;
-		if (j >= 0 && j < stage_data_[stg].nrows_)
-		{
-			rubd[j] = node_data_[node].rubd_scen_->getElements()[i];
-		}
+		rubd[i] = node->rubd_scen_[i];
 	}
 }
 
@@ -863,30 +1028,33 @@ void StoModel::__printData()
 
 	printf("nscen_ %d\n", nscen_);
 	printf("nstgs_ %d\n", nstgs_);
-	PRINT_ARRAY_OBJECT_MSG(nstgs_, stage_data_, nrows_, "nrows_")
-	PRINT_ARRAY_OBJECT_MSG(nstgs_, stage_data_, ncols_, "ncols_")
-	PRINT_ARRAY_OBJECT_MSG(nstgs_, stage_data_, rstart_, "rstart_")
-	PRINT_ARRAY_OBJECT_MSG(nstgs_, stage_data_, cstart_, "cstart_")
+	PRINT_ARRAY_OBJECT_MSG(nstgs_, *stage_data_, nrows_, "nrows_")
+	PRINT_ARRAY_OBJECT_MSG(nstgs_, *stage_data_, ncols_, "ncols_")
+	PRINT_ARRAY_OBJECT_MSG(nstgs_, *stage_data_, rstart_, "rstart_")
+	PRINT_ARRAY_OBJECT_MSG(nstgs_, *stage_data_, cstart_, "cstart_")
 
 	printf("\n### Core data ###\n\n");
 	printf("nrows_core_ %d\n", nrows_core_);
 	printf("ncols_core_ %d\n", ncols_core_);
 #if 1
-	for (int i = 0; i < nrows_core_; ++i)
+	for (int s = 0; s < nstgs_; ++s)
 	{
-		sprintf(tmpstr, "Core matrix row %d", i);
-		PRINT_COIN_PACKED_VECTOR_MSG((*rows_core_[i]), tmpstr)
+		for (int i = 0; i < stage_data_[s]->nrows_; ++i)
+		{
+			sprintf(tmpstr, "Core matrix row %d", i);
+			PRINT_COIN_PACKED_VECTOR_MSG((*(stage_data_[s]->rows_core_[i])), tmpstr)
+		}
 	}
 #endif
 	for (int t = 0; t < nstgs_; ++t)
 	{
 		printf("\n### Stage %d core data ###\n\n", t);
-		PRINT_ARRAY_MSG(stage_data_[t].ncols_, stage_data_[t].clbd_core_, "clbd_core_")
-		PRINT_ARRAY_MSG(stage_data_[t].ncols_, stage_data_[t].cubd_core_, "cubd_core_")
-		PRINT_ARRAY_MSG(stage_data_[t].ncols_, stage_data_[t].obj_core_, "obj_core_")
-		PRINT_ARRAY_MSG(stage_data_[t].ncols_, stage_data_[t].ctype_core_, "ctype_core_")
-		PRINT_ARRAY_MSG(stage_data_[t].nrows_, stage_data_[t].rlbd_core_, "rlbd_core_")
-		PRINT_ARRAY_MSG(stage_data_[t].nrows_, stage_data_[t].rubd_core_, "rubd_core_")
+		PRINT_ARRAY_MSG(stage_data_[t]->ncols_, stage_data_[t]->clbd_core_, "clbd_core_")
+		PRINT_ARRAY_MSG(stage_data_[t]->ncols_, stage_data_[t]->cubd_core_, "cubd_core_")
+		PRINT_ARRAY_MSG(stage_data_[t]->ncols_, stage_data_[t]->obj_core_, "obj_core_")
+		PRINT_ARRAY_MSG(stage_data_[t]->ncols_, stage_data_[t]->ctype_core_, "ctype_core_")
+		PRINT_ARRAY_MSG(stage_data_[t]->nrows_, stage_data_[t]->rlbd_core_, "rlbd_core_")
+		PRINT_ARRAY_MSG(stage_data_[t]->nrows_, stage_data_[t]->rubd_core_, "rubd_core_")
 		// printf("\n### quadratic objective coefficient ###\n\n");
 		// if (qobj_core_[t])
 		// {
@@ -903,18 +1071,18 @@ void StoModel::__printData()
 	for (int s = 0; s < nnodes_; ++s)
 	{
 		printf("\n### Scenario %d data ###\n\n", s);
-		printf("probability %E\n", node_data_[s].prob_);
-		printf("stage map %d\n", node_data_[s].stg_);
+		printf("probability %E\n", node_data_[s]->prob_);
+		printf("stage map %d\n", node_data_[s]->stg_);
 #if 1
 		printf("=== BEGINNING of CoinPackedMatrix mat_scen_[%d] ===\n", s);
-		if (node_data_[s].mat_scen_)
+		if (node_data_[s]->mat_scen_)
 		{
-			printf("isColOrdered %d\n", node_data_[s].mat_scen_->isColOrdered());
-			PRINT_ARRAY_MSG(node_data_[s].mat_scen_->getMajorDim(), node_data_[s].mat_scen_->getVectorStarts(), "VectorStarts")
+			printf("isColOrdered %d\n", node_data_[s]->mat_scen_->isColOrdered());
+			PRINT_ARRAY_MSG(node_data_[s]->mat_scen_->getMajorDim(), node_data_[s]->mat_scen_->getVectorStarts(), "VectorStarts")
 			PRINT_SPARSE_ARRAY_MSG(
-					node_data_[s].mat_scen_->getNumElements(),
-					node_data_[s].mat_scen_->getIndices(),
-					node_data_[s].mat_scen_->getElements(),
+					node_data_[s]->mat_scen_->getNumElements(),
+					node_data_[s]->mat_scen_->getIndices(),
+					node_data_[s]->mat_scen_->getElements(),
 					"Elements")
 		}
 		printf("=== END of CoinPackedMatrix mat_scen_[%d] ===\n", s);

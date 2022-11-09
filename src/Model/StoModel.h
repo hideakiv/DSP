@@ -17,6 +17,8 @@
 #include "Utility/DspMacros.h"
 #include "Utility/DspRtnCodes.h"
 
+#include <vector>
+
 struct StageData {
 	int nrows_;   /**< array of the number of rows for each stage */
 	int ncols_;   /**< array of the number of columns for each stage */
@@ -32,32 +34,40 @@ struct StageData {
 	char *   ctype_core_;          /**< column types for each stage */
 	CoinPackedVector ** rows_core_; /**< rows in core matrix */
 	// QuadRowData * qc_row_core_;		/**< parameters for quadratic rows in core: current version only accept noncoupling quadratic rows */
-	StageData() :
-		nrows_(0),
-		ncols_(0),
-		nints_(0),
-		rstart_(0),
-		cstart_(0),
-		clbd_core_(NULL),
-		cubd_core_(NULL),
-		obj_core_(NULL),
-		// qobj_core_(NULL),
-		rlbd_core_(NULL),
-		rubd_core_(NULL),
-		ctype_core_(NULL),
-		rows_core_(NULL)
-	{
-		/** nothing to do */
-	}
+	
+	/** default constructor */
+	StageData();
+
+	/** copy constructor */
+	StageData(const StageData & rhs);
+
+	/** default destructor */
+	virtual ~StageData();
 };
 
-struct NodeData {
-    /*
+class DspScnNode 
+{
+public:
+	/** default constructor */
+    DspScnNode();
+
+	/** copy constructor */
+	DspScnNode(const DspScnNode & rhs);
+
+	/** default destructor */
+	virtual ~DspScnNode();
+
+
+	void addParent(DspScnNode* parent){ parent_ = parent;}
+	void addChild(DspScnNode* child){ children_.push_back(child);}
+	 /*
 	 * Random data only (no core data)
 	 */
-	// SmiTreeNode<SmiScnNode* >* treenode;			/** link to treenode*/
+	
 	int stg_;						/** stage number*/
 	double prob_;                 	/**< scenario probability */
+	DspScnNode * parent_;
+	std::vector<DspScnNode* > children_;
 	CoinPackedMatrix * mat_scen_;  	/**< scenario matrix */
 	double * clbd_scen_; 	/**< column lower bounds for each scenario */
 	double * cubd_scen_; 	/**< column upper bounds for each scenario */
@@ -66,28 +76,9 @@ struct NodeData {
 	double * rlbd_scen_; 	/**< row lower bounds for each scenario */
 	double * rubd_scen_; 	/**< row upper bounds for each scenario */
 	// QuadRowData * qc_row_scen_;		/**< parameters for quadratic rows in scenarios: current version only accept noncoupling quadratic rows */
-
-    NodeData() :
-		// treenode(NULL),
-		stg_(0),
-        prob_(0.0),
-		mat_scen_(NULL),
-		clbd_scen_(NULL),
-		cubd_scen_(NULL),
-		obj_scen_(NULL),
-		// qobj_scen_(NULL),
-		rlbd_scen_(NULL),
-		rubd_scen_(NULL)
-		// qc_row_scen_(NULL),
-    {
-        /** nothing to do */
-    }
 };
 
 class StoModel {
-
-	typedef std::map<int,int> ScenNodeMap;
-	typedef std::map<int,int> NodeScenMap;
 
 public:
 
@@ -97,8 +88,7 @@ public:
 	/** copy constructor */
 	StoModel(const StoModel & rhs);
 
-	/** copy constructor */
-	StoModel(const SmiScnModel & rhs);
+	void copyAllSubNodes(const DspScnNode & rhs, DspScnNode* dsproot);
 
 	/** default destructor */
 	virtual ~StoModel();
@@ -132,16 +122,16 @@ public:
 	int getNumScenarios() const {return nscen_;}
 
 	/** get probability */
-    const double ** getProbability() {return prob_;}
+    const double getProbability(DspScnNode* node) {return node->prob_;}
 
 	/** get number of rows for a given stage */
-	int getNumRows(int stage) {return stage_data_[stage].nrows_;}
+	int getNumRows(int stage) {return stage_data_[stage]->nrows_;}
 
 	/** get number of columns for a given stage */
-	int getNumCols(int stage) {return stage_data_[stage].ncols_;}
+	int getNumCols(int stage) {return stage_data_[stage]->ncols_;}
 
 	/** get number of integer variables for a given stage */
-	int getNumIntegers(int stage) {return stage_data_[stage].nints_;}
+	int getNumIntegers(int stage) {return stage_data_[stage]->nints_;}
 
 	/** get number of integer variables in core */
     // not used?
@@ -156,9 +146,9 @@ public:
 	//int getNumScenQRows(int scen) {return qc_row_scen_[scen]->nqrows;}
 	
 	/** get objective function coefficients for a given stage */
-	const double * getObjCore(int stage) {return stage_data_[stage].obj_core_;}
+	const double * getObjCore(int stage) {return stage_data_[stage]->obj_core_;}
 
-	const CoinPackedVector * getObjScenario(int scenario, int stage);
+	const double * getObjNode(DspScnNode* node);
 
 	/** get quadratic objective function coefficients for a given stage */
     // deal with quad later
@@ -167,14 +157,14 @@ public:
 	//const CoinPackedMatrix * getQuadraticObjScenario(int scenario) {return qobj_scen_[scenario];}
 
 	/** get column type for a given stage */
-	const char * getCtypeCore(int stage) {return stage_data_[stage].ctype_core_;}
+	const char * getCtypeCore(int stage) {return stage_data_[stage]->ctype_core_;}
 
 	/** get initial solutions */
     // not used?
 	const Solutions getInitialSolutions() {return init_solutions_;}
 
 	/** get core coefficeints for a given stage */
-	const CoinPackedVector * getRowCore(int i) {return rows_core_[i];}
+	const CoinPackedVector * getRowCore(int stage, int i) {return stage_data_[stage]->rows_core_[i];}
 
 	/** get parameters for quadratic constraints in core*/
     // deal with quad later
@@ -189,7 +179,7 @@ public:
 	//bool hasQuadraticRow() const {return (hasQuadraticRowCore() || hasQuadraticRowScenario());}
 
 	/** set probability */
-	void setProbability(double *probability);
+	void setProbability(DspScnNode* node, double probability);
 
 	/** set initial solutions */
 	void setSolution(
@@ -220,8 +210,33 @@ public:
 	void addBranchingHyperplane(int nzcnt, int * indices, double * values, int priority);
 #endif
 
-public:
+private:
+	int counter; /**< for verification of core matrix order*/
 
+	/** load stage from core */
+	void addStage(
+		SmiCoreData * core,
+		int s
+	);
+
+	DspScnNode* createNode(
+		SmiCoreData * core,
+		SmiScnNode * scnnode
+	);
+
+	void addAllSubNodes(
+		SmiCoreData * core,
+		SmiTreeNode<SmiScnNode* > * root,
+		DspScnNode* dsproot
+	);
+
+	/** split given row vec*/
+	CoinPackedVector * splitRowVec(
+		SmiNodeData * node,
+		SmiCoreData * core,
+		int i /**< row index */
+	);
+public:
 	/** split core matrix row for a given stage */
 	CoinPackedVector * splitCoreRowVec(
 			int i,  /**< row index */
@@ -259,32 +274,32 @@ public:
 	void combineRandRowVec(
 			CoinPackedVector * row, /**< core row vector */
 			int i,                  /**< row index */
-			int node                /**< node index */);
+			DspScnNode* node        /**< node index */);
 
 	/** combine random matrix row for a given stage and scenario */
 	void combineRandRowVec(
 			CoinPackedVector * row, /**< core row vector */
 			int i,                  /**< row index */
 			int stg,                /**< stage index */
-			int node                /**< node index */);
+			DspScnNode* node        /**< node index */);
 
 	/** combine random column lower bounds */
-	void combineRandColLower(double * clbd, int stg, int node);
+	void combineRandColLower(double * clbd, DspScnNode* node);
 
 	/** combine random column upper bounds */
-	void combineRandColUpper(double * cubd, int stg, int node);
+	void combineRandColUpper(double * cubd, DspScnNode* node);
 
 	/** combine random objective coefficients */
-	void combineRandObjective(double * obj, int stg, int node, bool adjustProbability = true);
+	void combineRandObjective(double * obj, DspScnNode* node, double adjustProbability = 1.0);
 
 	/** combine random quadratic objective coefficients */
 	// void combineRandQuadraticObjective(CoinPackedMatrix * &qobj_coupling, CoinPackedMatrix * &qobj_ncoupling, int stg, int scen, bool adjustProbability = true);
 
 	/** combine random row lower bounds */
-	void combineRandRowLower(double * rlbd, int stg, int node);
+	void combineRandRowLower(double * rlbd, DspScnNode* node);
 
 	/** combine random row upper bounds */
-	void combineRandRowUpper(double * rubd, int stg, int node);
+	void combineRandRowUpper(double * rubd, DspScnNode* node);
 
 	/** shift vector indices by offset */
 	void shiftVecIndices(
@@ -324,11 +339,8 @@ protected:
 	int ncols_core_;                /**< number of columns in core */
 	int nints_core_;                /**< number of integer variables in core */
 
-	StageData* stage_data_;
-	SmiScenarioTree<NodeData *>  dsp_tree_;
-    NodeData* node_data_;
-	
-	ScenNodeMap scen2node_; /** map from scenario to leafnode */
+	StageData** stage_data_;
+    std::vector<DspScnNode* > node_data_;
 
 	Solutions init_solutions_; /**< initial solutions */
 
